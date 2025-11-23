@@ -1,0 +1,54 @@
+experiment:
+  name: bridge_sr_vctk
+
+data:
+  root: data/VCTK-Corpus-0.92
+  wav_root: data/VCTK-Corpus-0.92/wav48_silence_trimmed
+  sample_rate: 48000
+  segment_length: 32768
+  # 若 train_speakers 为空，则使用除 test_speakers 外的所有说话人作为训练集
+  train_speakers: []
+  # 可以按需调整为你偏好的测试说话人列表
+  test_speakers:
+    - p280
+    - p281
+    - p282
+    - p283
+    - p284
+    - p285
+    - p286
+    - p287
+
+train:
+  batch_size: 16
+  num_workers: 4
+  total_steps: 1000000
+  finetune_steps: 70000
+  learning_rate: 5.0e-5
+  log_interval: 10
+  eval_interval: 5000
+  save_interval: 5000
+  seed: 42
+
+bridge:
+  t_min: 1.0e-5
+  t_max: 1.0
+  beta_0: 8.0e-7
+  beta_1: 8.0e-2
+  scaling_factor: 12.0
+
+loss:
+  lambda_mag: 4.0e-6
+  lambda_phase: 5.0e-6
+
+model:
+  channels: 64
+  resblocks: 20
+
+sampler:
+  steps_50: 50
+  steps_8: 8
+  steps_4: 4
+  steps_2: 2
+  steps_1: 1
+

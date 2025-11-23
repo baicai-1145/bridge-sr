@@ -1,0 +1,9 @@
+numpy==1.26.4
+scipy==1.13.1
+tqdm==4.66.5
+pyyaml==6.0.2
+librosa==0.10.2.post1
+tensorboard==2.17.1
+
+# PyTorch 及其音频栈请单独安装，示例：
+# pip install torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu126
