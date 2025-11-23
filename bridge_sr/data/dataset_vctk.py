@@ -18,6 +18,8 @@ class VCTKDatasetConfig:
     test_speakers: Sequence[str]
     batch_size: int
     num_workers: int
+    cache_train_in_memory: bool = False
+    cache_test_in_memory: bool = False
 
 
 def _list_speakers(wav_root: str) -> List[str]:
@@ -87,17 +89,40 @@ class VCTKWaveformDataset(Dataset):
                 f"No audio files found for speakers {speakers} under {self.wav_root}"
             )
 
-    def __len__(self) -> int:
-        return len(self.paths)
+        # 可选：预先将所有波形加载到内存，减少每 step 的磁盘 I/O
+        self.cache_in_memory = (
+            cfg.cache_train_in_memory if is_train else cfg.cache_test_in_memory
+        )
+        self._wave_cache: Optional[List[torch.Tensor]] = None
+        if self.cache_in_memory:
+            self._wave_cache = []
+            for path in self.paths:
+                wav, sr = torchaudio.load(path)
+                if wav.ndim == 2 and wav.size(0) > 1:
+                    wav = wav.mean(dim=0, keepdim=True)
+                if sr != self.sample_rate:
+                    wav = torchaudio.functional.resample(wav, sr, self.sample_rate)
+                wav = wav.squeeze(0)
+                self._wave_cache.append(wav)
 
-    def __getitem__(self, index: int) -> Tuple[torch.Tensor, str]:
+    def _load_wave(self, index: int) -> torch.Tensor:
+        if self.cache_in_memory and self._wave_cache is not None:
+            return self._wave_cache[index]
+
         path = self.paths[index]
         wav, sr = torchaudio.load(path)
         if wav.ndim == 2 and wav.size(0) > 1:
             wav = wav.mean(dim=0, keepdim=True)
         if sr != self.sample_rate:
             wav = torchaudio.functional.resample(wav, sr, self.sample_rate)
-        wav = wav.squeeze(0)
+        return wav.squeeze(0)
+
+    def __len__(self) -> int:
+        return len(self.paths)
+
+    def __getitem__(self, index: int) -> Tuple[torch.Tensor, str]:
+        path = self.paths[index]
+        wav = self._load_wave(index)
 
         num_samples = wav.size(0)
         if num_samples == self.segment_length:
@@ -135,6 +160,8 @@ def build_vctk_config_from_yaml_dict(cfg_dict: Dict) -> VCTKDatasetConfig:
         test_speakers=list(data_cfg.get("test_speakers", [])),
         batch_size=int(train_cfg["batch_size"]),
         num_workers=int(train_cfg.get("num_workers", 4)),
+        cache_train_in_memory=bool(data_cfg.get("cache_train_in_memory", False)),
+        cache_test_in_memory=bool(data_cfg.get("cache_test_in_memory", False)),
     )
 
 
@@ -178,4 +205,3 @@ def create_dataloader(
         drop_last=is_train,
     )
     return loader
-
