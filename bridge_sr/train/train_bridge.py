@@ -91,6 +91,7 @@ def train_bridge(
     config_path: str,
     device: str = "cuda",
     max_steps: int | None = None,
+    checkpoint_path: str | None = None,
 ) -> None:
     cfg = load_config(config_path)
     train_cfg = cfg["train"]
@@ -124,6 +125,19 @@ def train_bridge(
     sampler = BridgeForwardSampler(schedule, device=device_obj)
 
     optimizer = Adam(model.parameters(), lr=float(train_cfg["learning_rate"]))
+
+    start_step = 0
+    if checkpoint_path is not None:
+        ckpt = torch.load(checkpoint_path, map_location=device_obj)
+        if "model" in ckpt:
+            model.load_state_dict(ckpt["model"])
+        if "optimizer" in ckpt:
+            try:
+                optimizer.load_state_dict(ckpt["optimizer"])
+            except Exception:
+                pass
+        if "step" in ckpt:
+            start_step = int(ckpt["step"])
 
     # 精度与 AMP / TF32 配置
     prec = str(train_cfg.get("precision", "fp32")).lower()
@@ -162,7 +176,7 @@ def train_bridge(
     scaling = float(bridge_cfg["scaling_factor"])
 
     model.train()
-    step = 0
+    step = start_step
     try:
         while step < total_steps:
             for batch in dataloader:
@@ -251,9 +265,20 @@ def main() -> None:
         default=None,
         help="Optional maximum training steps for debugging.",
     )
+    parser.add_argument(
+        "--checkpoint",
+        type=str,
+        default=None,
+        help="Optional checkpoint path to resume training from.",
+    )
     args = parser.parse_args()
 
-    train_bridge(args.config, device=args.device, max_steps=args.max_steps)
+    train_bridge(
+        args.config,
+        device=args.device,
+        max_steps=args.max_steps,
+        checkpoint_path=args.checkpoint,
+    )
 
 
 if __name__ == "__main__":
