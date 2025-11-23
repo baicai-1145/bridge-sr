@@ -29,6 +29,13 @@ train:
   eval_interval: 5000
   save_interval: 5000
   seed: 42
+  # precision 选项：
+  # - fp32: 纯 float32，不用 AMP，TF32 关闭
+  # - fp16: CUDA AMP + float16
+  # - bf16: CUDA AMP + bfloat16
+  # - tf32: 纯 float32，启用 TF32 matmul
+  # - fp16_tf32 / bf16_tf32: 同时启用 AMP 与 TF32
+  precision: bf16_tf32
 
 bridge:
   t_min: 1.0e-5
@@ -51,4 +58,3 @@ sampler:
   steps_4: 4
   steps_2: 2
   steps_1: 1
-

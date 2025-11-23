@@ -9,7 +9,8 @@ import torch
 from torch import nn
 from torch.optim import Adam
 from torch.utils.tensorboard import SummaryWriter
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast, GradScaler
+from contextlib import nullcontext
 import yaml
 
 from bridge_sr.utils import seed_everything
@@ -124,9 +125,29 @@ def train_bridge(
 
     optimizer = Adam(model.parameters(), lr=float(train_cfg["learning_rate"]))
 
-    # 混合精度
-    use_amp = device_obj.type == "cuda"
-    scaler = GradScaler(enabled=use_amp)
+    # 精度与 AMP / TF32 配置
+    prec = str(train_cfg.get("precision", "fp32")).lower()
+    use_amp = False
+    amp_dtype = None
+    if device_obj.type == "cuda":
+        # TF32 设置
+        if "tf32" in prec:
+            torch.set_float32_matmul_precision("medium")
+        else:
+            torch.set_float32_matmul_precision("highest")
+
+        # AMP dtype 设置
+        if "fp16" in prec:
+            use_amp = True
+            amp_dtype = torch.float16
+        elif "bf16" in prec:
+            use_amp = True
+            amp_dtype = torch.bfloat16
+    # GradScaler 仅在 CUDA 上启用，CPU 时无效但保持接口一致
+    if device_obj.type == "cuda":
+        scaler = GradScaler("cuda", enabled=use_amp)
+    else:
+        scaler = GradScaler("cpu", enabled=False)
 
     # TensorBoard
     log_dir = Path("runs") / "bridge_sr_stage1"
@@ -160,14 +181,19 @@ def train_bridge(
                 t = torch.rand(x0.size(0), device=device_obj)
                 x_t = sampler.sample(x0, xT, t)
 
-                with autocast(device_type=device_obj.type, enabled=use_amp):
+                ctx = autocast(device_obj.type, dtype=amp_dtype) if use_amp else nullcontext()
+                with ctx:
                     x_hat0 = model(x_t, t, xT)
                     loss = bridge_loss(x_hat0, x0)
 
                 optimizer.zero_grad()
-                scaler.scale(loss).backward()
-                scaler.step(optimizer)
-                scaler.update()
+                if use_amp:
+                    scaler.scale(loss).backward()
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    loss.backward()
+                    optimizer.step()
 
                 step += 1
 
