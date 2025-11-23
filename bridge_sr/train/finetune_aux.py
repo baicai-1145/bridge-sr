@@ -66,11 +66,6 @@ def finetune_aux(
     device_obj = torch.device(device if torch.cuda.is_available() else "cpu")
 
     dataloader = create_dataloader(cfg, is_train=True)
-    lr_generator = LRGenerator(
-        sr_target=int(cfg["data"]["sample_rate"]),
-        sr_min=6000,
-        sr_max=48000,
-    )
 
     model = BridgeSRBackbone(
         channels=int(cfg["model"]["channels"]),
@@ -136,14 +131,9 @@ def finetune_aux(
     try:
         while step < total_steps:
             for batch in dataloader:
-                x_hr, _ = batch
+                x_hr, x_lr, _ = batch
                 x_hr = x_hr.to(device_obj)
-
-                x_lr_list = []
-                for i in range(x_hr.size(0)):
-                    x_lr_i, _ = lr_generator(x_hr[i])
-                    x_lr_list.append(x_lr_i)
-                x_lr = torch.stack(x_lr_list, dim=0).to(device_obj)
+                x_lr = x_lr.to(device_obj)
 
                 x0 = scaling * x_hr
                 xT = scaling * x_lr

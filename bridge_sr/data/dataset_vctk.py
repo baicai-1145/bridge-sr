@@ -7,6 +7,8 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 import torchaudio
 
+from bridge_sr.data.lr_generator import LRGenerator
+
 
 @dataclass
 class VCTKDatasetConfig:
@@ -20,6 +22,8 @@ class VCTKDatasetConfig:
     num_workers: int
     cache_train_in_memory: bool = False
     cache_test_in_memory: bool = False
+    lr_sr_min: int = 6000
+    lr_sr_max: int = 48000
 
 
 def _list_speakers(wav_root: str) -> List[str]:
@@ -77,6 +81,8 @@ class VCTKWaveformDataset(Dataset):
         self.segment_length = cfg.segment_length
         self.is_train = is_train
         self.normalize = normalize
+        self.lr_sr_min = cfg.lr_sr_min
+        self.lr_sr_max = cfg.lr_sr_max
 
         self.paths: List[str] = _collect_files(
             self.wav_root,
@@ -89,13 +95,22 @@ class VCTKWaveformDataset(Dataset):
                 f"No audio files found for speakers {speakers} under {self.wav_root}"
             )
 
-        # 可选：预先将所有波形加载到内存，减少每 step 的磁盘 I/O
+        # LR 生成器：将 HR 波形降采样再升采样到目标采样率
+        self.lr_generator = LRGenerator(
+            sr_target=self.sample_rate,
+            sr_min=self.lr_sr_min,
+            sr_max=self.lr_sr_max,
+        )
+
+        # 可选：预先将 HR/LR 波形加载到内存，减少每 step 的磁盘 I/O 和重采样开销
         self.cache_in_memory = (
             cfg.cache_train_in_memory if is_train else cfg.cache_test_in_memory
         )
         self._wave_cache: Optional[List[torch.Tensor]] = None
+        self._lr_cache: Optional[List[torch.Tensor]] = None
         if self.cache_in_memory:
             self._wave_cache = []
+            self._lr_cache = []
             for path in self.paths:
                 wav, sr = torchaudio.load(path)
                 if wav.ndim == 2 and wav.size(0) > 1:
@@ -104,10 +119,12 @@ class VCTKWaveformDataset(Dataset):
                     wav = torchaudio.functional.resample(wav, sr, self.sample_rate)
                 wav = wav.squeeze(0)
                 self._wave_cache.append(wav)
+                wav_lr, _ = self.lr_generator(wav)
+                self._lr_cache.append(wav_lr)
 
-    def _load_wave(self, index: int) -> torch.Tensor:
-        if self.cache_in_memory and self._wave_cache is not None:
-            return self._wave_cache[index]
+    def _load_wave_pair(self, index: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        if self.cache_in_memory and self._wave_cache is not None and self._lr_cache is not None:
+            return self._wave_cache[index], self._lr_cache[index]
 
         path = self.paths[index]
         wav, sr = torchaudio.load(path)
@@ -115,16 +132,18 @@ class VCTKWaveformDataset(Dataset):
             wav = wav.mean(dim=0, keepdim=True)
         if sr != self.sample_rate:
             wav = torchaudio.functional.resample(wav, sr, self.sample_rate)
-        return wav.squeeze(0)
+        wav = wav.squeeze(0)
+        wav_lr, _ = self.lr_generator(wav)
+        return wav, wav_lr
 
     def __len__(self) -> int:
         return len(self.paths)
 
-    def __getitem__(self, index: int) -> Tuple[torch.Tensor, str]:
+    def __getitem__(self, index: int) -> Tuple[torch.Tensor, torch.Tensor, str]:
         path = self.paths[index]
-        wav = self._load_wave(index)
+        wav_hr, wav_lr = self._load_wave_pair(index)
 
-        num_samples = wav.size(0)
+        num_samples = wav_hr.size(0)
         if num_samples == self.segment_length:
             start = 0
         elif num_samples > self.segment_length:
@@ -133,19 +152,22 @@ class VCTKWaveformDataset(Dataset):
         else:
             # 此情形理论上已在文件收集阶段过滤，这里退而求其次做末尾零填充
             pad = self.segment_length - num_samples
-            wav = torch.nn.functional.pad(wav, (0, pad))
+            wav_hr = torch.nn.functional.pad(wav_hr, (0, pad))
+            wav_lr = torch.nn.functional.pad(wav_lr, (0, pad))
             start = 0
 
-        seg = wav[start : start + self.segment_length]
+        seg_hr = wav_hr[start : start + self.segment_length]
+        seg_lr = wav_lr[start : start + self.segment_length]
 
         if self.normalize:
-            max_val = seg.abs().max()
+            max_val = seg_hr.abs().max()
             if max_val > 0:
-                seg = seg / max_val
+                seg_hr = seg_hr / max_val
+                seg_lr = seg_lr / max_val
 
         # 也返回说话人 ID，便于后续分析
         spk = os.path.basename(os.path.dirname(path))
-        return seg, spk
+        return seg_hr, seg_lr, spk
 
 
 def build_vctk_config_from_yaml_dict(cfg_dict: Dict) -> VCTKDatasetConfig:
@@ -162,6 +184,8 @@ def build_vctk_config_from_yaml_dict(cfg_dict: Dict) -> VCTKDatasetConfig:
         num_workers=int(train_cfg.get("num_workers", 4)),
         cache_train_in_memory=bool(data_cfg.get("cache_train_in_memory", False)),
         cache_test_in_memory=bool(data_cfg.get("cache_test_in_memory", False)),
+        lr_sr_min=int(data_cfg.get("lr_sr_min", 6000)),
+        lr_sr_max=int(data_cfg.get("lr_sr_max", 48000)),
     )
 
 

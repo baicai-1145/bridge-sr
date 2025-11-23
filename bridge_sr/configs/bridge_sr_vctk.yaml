@@ -6,9 +6,12 @@ data:
   wav_root: data/VCTK-Corpus-0.92/wav48_silence_trimmed
   sample_rate: 48000
   segment_length: 32768
-  # 是否将数据集全部缓存到内存
-  cache_train_in_memory: true
+  # 是否将数据集全部缓存到内存（默认关闭，按需开启）
+  cache_train_in_memory: false
   cache_test_in_memory: false
+  # any-to-48k 训练时的低采样率范围
+  lr_sr_min: 6000
+  lr_sr_max: 48000
   # 若 train_speakers 为空，则使用除 test_speakers 外的所有说话人作为训练集
   train_speakers: []
   # 可以按需调整为你偏好的测试说话人列表

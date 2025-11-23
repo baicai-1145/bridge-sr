@@ -15,7 +15,6 @@ import yaml
 
 from bridge_sr.utils import seed_everything
 from bridge_sr.data.dataset_vctk import create_dataloader
-from bridge_sr.data.lr_generator import LRGenerator
 from bridge_sr.models.nuwave2_backbone import BridgeSRBackbone
 from bridge_sr.bridge.schedule import BridgeGMaxConfig, BridgeGMaxSchedule
 from bridge_sr.bridge.sampler import BridgeForwardSampler
@@ -48,7 +47,6 @@ def evaluate_bridge_loss(
     model: nn.Module,
     sampler: BridgeForwardSampler,
     dataloader,
-    lr_generator: LRGenerator,
     scaling: float,
     device: torch.device,
     max_batches: int = 10,
@@ -60,14 +58,9 @@ def evaluate_bridge_loss(
     for batch_idx, batch in enumerate(dataloader):
         if batch_idx >= max_batches:
             break
-        x_hr, _ = batch
+        x_hr, x_lr, _ = batch
         x_hr = x_hr.to(device)
-
-        x_lr_list = []
-        for i in range(x_hr.size(0)):
-            x_lr_i, _ = lr_generator(x_hr[i])
-            x_lr_list.append(x_lr_i)
-        x_lr = torch.stack(x_lr_list, dim=0).to(device)
+        x_lr = x_lr.to(device)
 
         x0 = scaling * x_hr
         xT = scaling * x_lr
@@ -103,11 +96,6 @@ def train_bridge(
 
     dataloader = create_dataloader(cfg, is_train=True)
     val_dataloader = create_dataloader(cfg, is_train=False)
-    lr_generator = LRGenerator(
-        sr_target=int(cfg["data"]["sample_rate"]),
-        sr_min=6000,
-        sr_max=48000,
-    )
 
     model = BridgeSRBackbone(
         channels=int(cfg["model"]["channels"]),
@@ -180,14 +168,9 @@ def train_bridge(
     try:
         while step < total_steps:
             for batch in dataloader:
-                x_hr, _ = batch  # (B, T), 已是 48kHz
+                x_hr, x_lr, _ = batch  # (B, T), 已是 48kHz
                 x_hr = x_hr.to(device_obj)
-
-                x_lr_list = []
-                for i in range(x_hr.size(0)):
-                    x_lr_i, _ = lr_generator(x_hr[i])
-                    x_lr_list.append(x_lr_i)
-                x_lr = torch.stack(x_lr_list, dim=0).to(device_obj)
+                x_lr = x_lr.to(device_obj)
 
                 x0 = scaling * x_hr
                 xT = scaling * x_lr
@@ -225,7 +208,6 @@ def train_bridge(
                         model=model,
                         sampler=sampler,
                         dataloader=val_dataloader,
-                        lr_generator=lr_generator,
                         scaling=scaling,
                         device=device_obj,
                         max_batches=10,
