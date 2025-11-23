@@ -8,6 +8,7 @@ import torch
 from torch import nn
 from torch.optim import Adam
 from torch.utils.tensorboard import SummaryWriter
+from torch.cuda.amp import autocast, GradScaler
 import yaml
 
 from bridge_sr.utils import seed_everything
@@ -108,6 +109,10 @@ def finetune_aux(
     log_dir.mkdir(parents=True, exist_ok=True)
     writer = SummaryWriter(log_dir=str(log_dir))
 
+    # 混合精度
+    use_amp = device_obj.type == "cuda"
+    scaler = GradScaler(enabled=use_amp)
+
     model.train()
     step = 0
     try:
@@ -128,21 +133,23 @@ def finetune_aux(
                 t = torch.rand(x0.size(0), device=device_obj)
                 x_t = sampler.sample(x0, xT, t)
 
-                x_hat0 = model(x_t, t, xT)
+                with autocast(device_type=device_obj.type, enabled=use_amp):
+                    x_hat0 = model(x_t, t, xT)
 
-                # Bridge loss 在缩放空间上计算
-                l_bridge = bridge_loss(x_hat0, x0)
+                    # Bridge loss 在缩放空间上计算
+                    l_bridge = bridge_loss(x_hat0, x0)
 
-                # STFT / phase 损失在还原尺度的波形上计算
-                x_hat0_unscaled = x_hat0 / scaling
-                l_mag = multi_scale_stft_mag_loss(x_hat0_unscaled, x_hr)
-                l_phase = multi_scale_phase_loss(x_hat0_unscaled, x_hr)
+                    # STFT / phase 损失在还原尺度的波形上计算
+                    x_hat0_unscaled = x_hat0 / scaling
+                    l_mag = multi_scale_stft_mag_loss(x_hat0_unscaled, x_hr)
+                    l_phase = multi_scale_phase_loss(x_hat0_unscaled, x_hr)
 
-                loss = l_bridge + lambda_mag * l_mag + lambda_phase * l_phase
+                    loss = l_bridge + lambda_mag * l_mag + lambda_phase * l_phase
 
                 optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
 
                 step += 1
 

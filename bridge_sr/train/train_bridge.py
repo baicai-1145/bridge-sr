@@ -9,6 +9,7 @@ import torch
 from torch import nn
 from torch.optim import Adam
 from torch.utils.tensorboard import SummaryWriter
+from torch.cuda.amp import autocast, GradScaler
 import yaml
 
 from bridge_sr.utils import seed_everything
@@ -123,6 +124,10 @@ def train_bridge(
 
     optimizer = Adam(model.parameters(), lr=float(train_cfg["learning_rate"]))
 
+    # 混合精度
+    use_amp = device_obj.type == "cuda"
+    scaler = GradScaler(enabled=use_amp)
+
     # TensorBoard
     log_dir = Path("runs") / "bridge_sr_stage1"
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -155,13 +160,14 @@ def train_bridge(
                 t = torch.rand(x0.size(0), device=device_obj)
                 x_t = sampler.sample(x0, xT, t)
 
-                x_hat0 = model(x_t, t, xT)
-
-                loss = bridge_loss(x_hat0, x0)
+                with autocast(device_type=device_obj.type, enabled=use_amp):
+                    x_hat0 = model(x_t, t, xT)
+                    loss = bridge_loss(x_hat0, x0)
 
                 optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
 
                 step += 1
 
