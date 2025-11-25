@@ -28,6 +28,9 @@ def _compute_stft(x: torch.Tensor, n_fft: int, hop_length: int, win_length: int)
     else:
         raise ValueError("x must have shape (B, T) or (B, 1, T)")
 
+    # 为了兼容 AMP 下的 fp16 / bf16，这里统一使用 float32 进行 STFT，
+    # 避免 cuFFT 不支持低精度类型导致的错误。
+    x = x.to(torch.float32)
     window = torch.hann_window(win_length, device=x.device, dtype=x.dtype)
     X = torch.stft(
         x,
@@ -82,5 +85,4 @@ def multi_scale_phase_loss(
         loss = loss + torch.mean(torch.abs(dphase_wrapped))
     loss = loss / float(len(configs))
     return loss
-
 
